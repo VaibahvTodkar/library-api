@@ -9,6 +9,8 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
+import com.school.library.handler.SecurityAccessDeniedHandler;
+import com.school.library.handler.SecurityExceptionHandler;
 import com.school.library.security.jwt.JwtAuthenticationFilter;
 
 @Configuration
@@ -17,9 +19,13 @@ import com.school.library.security.jwt.JwtAuthenticationFilter;
 public class SecurityConfig {
 
 	private final JwtAuthenticationFilter jwtAuthenticationFilter;
+	private final SecurityExceptionHandler securityExceptionHandler;
+	private final SecurityAccessDeniedHandler securityAccessDeniedHandler;
 
-	public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+	public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter, SecurityExceptionHandler securityExceptionHandler, SecurityAccessDeniedHandler securityAccessDeniedHandler) {
 		this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+		this.securityExceptionHandler = securityExceptionHandler;
+		this.securityAccessDeniedHandler = securityAccessDeniedHandler;
 	}
 
 	@Bean
@@ -35,6 +41,15 @@ public class SecurityConfig {
 
 				// We are using Bearer tokens
 				.csrf(csrf -> csrf.disable())
+				
+				.exceptionHandling(exception -> exception
+	                    .authenticationEntryPoint(
+	                            securityExceptionHandler
+	                    )
+	                    .accessDeniedHandler(
+	                            securityAccessDeniedHandler
+	                    )
+	            )
 
 				.authorizeHttpRequests(auth -> auth
 

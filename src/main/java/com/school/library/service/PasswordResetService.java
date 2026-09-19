@@ -14,6 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.school.library.entity.PasswordResetToken;
 import com.school.library.entity.User;
+import com.school.library.exception.InvalidPasswordResetTokenException;
+import com.school.library.exception.PasswordResetTokenUsedException;
+import com.school.library.exception.TokenExpiredException;
 import com.school.library.repository.PasswordResetTokenRepository;
 import com.school.library.repository.UserRepository;
 
@@ -22,13 +25,13 @@ import com.school.library.repository.UserRepository;
 public class PasswordResetService {
 
     private static final int TOKEN_BYTES = 64;
+    private static final int TOKEN_EXPIRY_MINUTES = 15;
 
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository tokenRepository;
     private final PasswordEncoder passwordEncoder;
 
-    private final SecureRandom secureRandom =
-            new SecureRandom();
+    private final SecureRandom secureRandom = new SecureRandom();
 
     public PasswordResetService(
             UserRepository userRepository,
@@ -46,13 +49,13 @@ public class PasswordResetService {
      * IMPORTANT:
      * In production this should send the token
      * through an EmailService.
+     *
+     * This method intentionally does not throw an exception
+     * when the email does not exist to prevent account enumeration.
      */
-    public void requestPasswordReset(
-            String email
-    ) {
+    public void requestPasswordReset(String email) {
 
-        String normalizedEmail =
-                email.trim().toLowerCase();
+        String normalizedEmail = email.trim().toLowerCase();
 
         userRepository
                 .findByEmail(normalizedEmail)
@@ -63,24 +66,20 @@ public class PasswordResetService {
                      */
                     tokenRepository.deleteByUser(user);
 
-                    String rawToken =
-                            generateToken();
+                    String rawToken = generateToken();
+
+                    Instant now = Instant.now();
 
                     PasswordResetToken resetToken =
                             PasswordResetToken.builder()
                                     .user(user)
-                                    .tokenHash(
-                                            hashToken(rawToken)
-                                    )
-                                    .createdAt(
-                                            Instant.now()
-                                    )
+                                    .tokenHash(hashToken(rawToken))
+                                    .createdAt(now)
                                     .expiresAt(
-                                            Instant.now()
-                                                    .plus(
-                                                            15,
-                                                            ChronoUnit.MINUTES
-                                                    )
+                                            now.plus(
+                                                    TOKEN_EXPIRY_MINUTES,
+                                                    ChronoUnit.MINUTES
+                                            )
                                     )
                                     .build();
 
@@ -89,65 +88,72 @@ public class PasswordResetService {
                     /*
                      * TODO:
                      *
-                     * Send email:
+                     * Send email through EmailService:
                      *
                      * https://frontend.school.com/reset-password?token=<rawToken>
                      *
-                     * Never store rawToken in the database.
+                     * NEVER store rawToken in the database.
                      */
                     System.out.println(
-                            "PASSWORD RESET TOKEN: "
-                                    + rawToken
+                            "PASSWORD RESET TOKEN: " + rawToken
                     );
                 });
     }
 
     /**
-     * Reset password.
+     * Reset password using a valid password reset token.
      */
     public void resetPassword(
             String rawToken,
             String newPassword
     ) {
 
-        String tokenHash =
-                hashToken(rawToken);
+        if (rawToken == null || rawToken.isBlank()) {
+            throw new InvalidPasswordResetTokenException(
+                    "Password reset token is required"
+            );
+        }
+
+        String tokenHash = hashToken(rawToken);
 
         PasswordResetToken resetToken =
                 tokenRepository
                         .findByTokenHash(tokenHash)
                         .orElseThrow(() ->
-                                new IllegalArgumentException(
-                                        "Invalid or expired reset token"
+                                new InvalidPasswordResetTokenException(
+                                        "Invalid password reset token"
                                 )
                         );
 
+        /*
+         * Token must be single-use.
+         */
         if (resetToken.getUsedAt() != null) {
+            throw new PasswordResetTokenUsedException();
+        }
 
-            throw new IllegalArgumentException(
-                    "Reset token has already been used"
+        /*
+         * Token expiration.
+         */
+        if (resetToken.getExpiresAt() == null
+                || resetToken.getExpiresAt().isBefore(Instant.now())) {
+
+            throw new TokenExpiredException(
+                    "Password reset token has expired"
             );
         }
 
-        if (resetToken.getExpiresAt()
-                .isBefore(Instant.now())) {
+        User user = resetToken.getUser();
 
-            throw new IllegalArgumentException(
-                    "Reset token has expired"
-            );
-        }
-
-        User user =
-                resetToken.getUser();
-
+        /*
+         * Update password.
+         */
         user.setPasswordHash(
-                passwordEncoder.encode(
-                        newPassword
-                )
+                passwordEncoder.encode(newPassword)
         );
 
         /*
-         * Invalidate existing JWTs if your JWT validation
+         * Invalidate existing JWTs if JWT validation
          * checks tokenVersion.
          */
         user.setTokenVersion(
@@ -157,26 +163,29 @@ public class PasswordResetService {
         /*
          * Revoke all refresh sessions.
          */
+        Instant now = Instant.now();
+
         user.getRefreshTokens()
                 .forEach(token ->
-                        token.setRevokedAt(
-                                Instant.now()
-                        )
+                        token.setRevokedAt(now)
                 );
 
         userRepository.save(user);
 
-        resetToken.setUsedAt(
-                Instant.now()
-        );
+        /*
+         * Mark reset token as consumed.
+         */
+        resetToken.setUsedAt(now);
 
         tokenRepository.save(resetToken);
     }
 
+    /**
+     * Generates a cryptographically secure random token.
+     */
     private String generateToken() {
 
-        byte[] bytes =
-                new byte[TOKEN_BYTES];
+        byte[] bytes = new byte[TOKEN_BYTES];
 
         secureRandom.nextBytes(bytes);
 
@@ -185,26 +194,30 @@ public class PasswordResetService {
                 .encodeToString(bytes);
     }
 
-    private String hashToken(
-            String token
-    ) {
+    /**
+     * SHA-256 hash of the reset token.
+     *
+     * Only the hash is stored in the database.
+     */
+    private String hashToken(String token) {
 
         try {
-
             MessageDigest digest =
                     MessageDigest.getInstance("SHA-256");
 
             byte[] hash =
                     digest.digest(
-                            token.getBytes(
-                                    StandardCharsets.UTF_8
-                            )
+                            token.getBytes(StandardCharsets.UTF_8)
                     );
 
             return HexFormat.of().formatHex(hash);
 
         } catch (Exception ex) {
 
+            /*
+             * This is an infrastructure/JVM-level failure,
+             * not a client/business validation error.
+             */
             throw new IllegalStateException(
                     "Unable to hash password reset token",
                     ex

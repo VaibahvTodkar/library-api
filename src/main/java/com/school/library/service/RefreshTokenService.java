@@ -1,13 +1,5 @@
 package com.school.library.service;
 
-import com.school.library.entity.RefreshToken;
-import com.school.library.entity.User;
-import com.school.library.repository.RefreshTokenRepository;
-
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -16,168 +8,278 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.school.library.entity.RefreshToken;
+import com.school.library.entity.User;
+import com.school.library.exception.InvalidRefreshTokenException;
+import com.school.library.exception.RefreshTokenReuseException;
+import com.school.library.exception.TokenExpiredException;
+import com.school.library.repository.RefreshTokenRepository;
+
 @Service
 @Transactional
 public class RefreshTokenService {
 
-	private static final int TOKEN_BYTES = 64;
+    private static final int TOKEN_BYTES = 64;
 
-	private final RefreshTokenRepository refreshTokenRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
+    private final SecureRandom secureRandom;
+    private final long refreshTokenTtlDays;
 
-	private final SecureRandom secureRandom;
+    public RefreshTokenService(
+            RefreshTokenRepository refreshTokenRepository,
+            @Value("${app.jwt.refresh-token-ttl-days:7}")
+            long refreshTokenTtlDays
+    ) {
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.refreshTokenTtlDays = refreshTokenTtlDays;
+        this.secureRandom = new SecureRandom();
+    }
 
-	private final long refreshTokenTtlDays;
+    // =========================================================
+    // CREATE
+    // =========================================================
 
-	public RefreshTokenService(RefreshTokenRepository refreshTokenRepository,
-			@Value("${app.jwt.refresh-token-ttl-days:7}") long refreshTokenTtlDays) {
-		this.refreshTokenRepository = refreshTokenRepository;
-		this.refreshTokenTtlDays = refreshTokenTtlDays;
-		this.secureRandom = new SecureRandom();
-	}
+    public RefreshTokenResult create(
+            User user,
+            String deviceId,
+            String userAgent,
+            String ip
+    ) {
 
-	// =========================================================
-	// CREATE
-	// =========================================================
+        String rawToken = generateToken();
 
-	public RefreshTokenResult create(User user, String deviceId, String userAgent, String ip) {
+        String tokenHash = hashToken(rawToken);
 
-		String rawToken = generateToken();
+        Instant issuedAt = Instant.now();
 
-		String tokenHash = hashToken(rawToken);
+        Instant expiresAt =
+                issuedAt.plus(
+                        refreshTokenTtlDays,
+                        ChronoUnit.DAYS
+                );
 
-		Instant issuedAt = Instant.now();
+        RefreshToken refreshToken =
+                RefreshToken.builder()
+                        .user(user)
+                        .tokenHash(tokenHash)
+                        .deviceId(deviceId)
+                        .userAgent(userAgent)
+                        .ip(ip)
+                        .issuedAt(issuedAt)
+                        .expiresAt(expiresAt)
+                        .build();
 
-		Instant expiresAt = issuedAt.plus(refreshTokenTtlDays, ChronoUnit.DAYS);
+        refreshTokenRepository.save(refreshToken);
 
-		RefreshToken refreshToken = RefreshToken.builder().user(user).tokenHash(tokenHash).deviceId(deviceId)
-				.userAgent(userAgent).ip(ip).issuedAt(issuedAt).expiresAt(expiresAt).build();
+        return new RefreshTokenResult(
+                rawToken,
+                refreshToken
+        );
+    }
 
-		refreshTokenRepository.save(refreshToken);
+    // =========================================================
+    // VALIDATE
+    // =========================================================
 
-		return new RefreshTokenResult(rawToken, refreshToken);
-	}
+    @Transactional(readOnly = true)
+    public RefreshToken validate(String rawToken) {
 
-	// =========================================================
-	// VALIDATE
-	// =========================================================
+        if (rawToken == null || rawToken.isBlank()) {
+            throw new InvalidRefreshTokenException(
+                    "Refresh token is required"
+            );
+        }
 
-	@Transactional(readOnly = true)
-	public RefreshToken validate(String rawToken) {
+        String tokenHash = hashToken(rawToken);
 
-		String tokenHash = hashToken(rawToken);
+        RefreshToken refreshToken =
+                refreshTokenRepository
+                        .findByTokenHash(tokenHash)
+                        .orElseThrow(() ->
+                                new InvalidRefreshTokenException(
+                                        "Invalid refresh token"
+                                )
+                        );
 
-		RefreshToken refreshToken = refreshTokenRepository.findByTokenHash(tokenHash)
-				.orElseThrow(() -> new IllegalArgumentException("Invalid refresh token"));
+        /*
+         * A revoked token that has a replacement means
+         * the original refresh token was already rotated.
+         */
+        if (refreshToken.getRevokedAt() != null) {
 
-		if (refreshToken.getRevokedAt() != null) {
+            if (refreshToken.getReplacedBy() != null) {
+                throw new RefreshTokenReuseException(
+                        "Refresh token has already been used"
+                );
+            }
 
-			throw new IllegalArgumentException("Refresh token has been revoked");
-		}
+            throw new InvalidRefreshTokenException(
+                    "Refresh token has been revoked"
+            );
+        }
 
-		if (refreshToken.getExpiresAt().isBefore(Instant.now())) {
+        /*
+         * Check expiration after validating the token exists.
+         */
+        if (refreshToken.getExpiresAt() == null
+                || refreshToken.getExpiresAt().isBefore(Instant.now())) {
 
-			throw new IllegalArgumentException("Refresh token has expired");
-		}
+            throw new TokenExpiredException(
+                    "Refresh token has expired"
+            );
+        }
 
-		return refreshToken;
-	}
+        return refreshToken;
+    }
 
-	// =========================================================
-	// ROTATE
-	// =========================================================
+    // =========================================================
+    // ROTATE
+    // =========================================================
 
-	public RefreshTokenResult rotate(String rawToken, String deviceId, String userAgent, String ip) {
+    public RefreshTokenResult rotate(
+            String rawToken,
+            String deviceId,
+            String userAgent,
+            String ip
+    ) {
 
-		RefreshToken oldToken = validate(rawToken);
+        RefreshToken oldToken = validate(rawToken);
 
-		/*
-		 * Create the replacement token first.
-		 */
-		RefreshTokenResult newToken = create(oldToken.getUser(), deviceId, userAgent, ip);
+        /*
+         * Create the replacement token first.
+         */
+        RefreshTokenResult newToken =
+                create(
+                        oldToken.getUser(),
+                        deviceId,
+                        userAgent,
+                        ip
+                );
 
-		/*
-		 * Revoke old token.
-		 */
-		oldToken.setRevokedAt(Instant.now());
+        /*
+         * Revoke old token.
+         */
+        Instant now = Instant.now();
 
-		/*
-		 * Link old token -> new token.
-		 */
-		oldToken.setReplacedBy(newToken.refreshToken());
+        oldToken.setRevokedAt(now);
 
-		refreshTokenRepository.save(oldToken);
+        /*
+         * Link old token -> replacement token.
+         */
+        oldToken.setReplacedBy(
+                newToken.refreshToken()
+        );
 
-		return newToken;
-	}
+        refreshTokenRepository.save(oldToken);
 
-	// =========================================================
-	// REVOKE
-	// =========================================================
+        return newToken;
+    }
 
-	public void revoke(String rawToken) {
+    // =========================================================
+    // REVOKE
+    // =========================================================
 
-		String tokenHash = hashToken(rawToken);
+    public void revoke(String rawToken) {
 
-		refreshTokenRepository.findByTokenHash(tokenHash).ifPresent(token -> {
+        if (rawToken == null || rawToken.isBlank()) {
+            return;
+        }
 
-			if (token.getRevokedAt() == null) {
+        String tokenHash = hashToken(rawToken);
 
-				token.setRevokedAt(Instant.now());
+        refreshTokenRepository
+                .findByTokenHash(tokenHash)
+                .ifPresent(token -> {
 
-				refreshTokenRepository.save(token);
-			}
-		});
-	}
+                    if (token.getRevokedAt() == null) {
 
-	// =========================================================
-	// GENERATE RAW TOKEN
-	// =========================================================
+                        token.setRevokedAt(
+                                Instant.now()
+                        );
 
-	private String generateToken() {
+                        refreshTokenRepository.save(token);
+                    }
+                });
+    }
 
-		byte[] bytes = new byte[TOKEN_BYTES];
+    // =========================================================
+    // GENERATE RAW TOKEN
+    // =========================================================
 
-		secureRandom.nextBytes(bytes);
+    private String generateToken() {
 
-		return "rt_" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-	}
+        byte[] bytes =
+                new byte[TOKEN_BYTES];
 
-	// =========================================================
-	// SHA-256
-	// =========================================================
+        secureRandom.nextBytes(bytes);
 
-	private String hashToken(String rawToken) {
+        return "rt_"
+                + Base64.getUrlEncoder()
+                        .withoutPadding()
+                        .encodeToString(bytes);
+    }
 
-		try {
+    // =========================================================
+    // SHA-256
+    // =========================================================
 
-			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    private String hashToken(String rawToken) {
 
-			byte[] hash = digest.digest(rawToken.getBytes(StandardCharsets.UTF_8));
+        try {
 
-			return bytesToHex(hash);
+            MessageDigest digest =
+                    MessageDigest.getInstance("SHA-256");
 
-		} catch (NoSuchAlgorithmException ex) {
+            byte[] hash =
+                    digest.digest(
+                            rawToken.getBytes(
+                                    StandardCharsets.UTF_8
+                            )
+                    );
 
-			throw new IllegalStateException("SHA-256 algorithm is not available", ex);
-		}
-	}
+            return bytesToHex(hash);
 
-	private String bytesToHex(byte[] bytes) {
+        } catch (NoSuchAlgorithmException ex) {
 
-		StringBuilder result = new StringBuilder(bytes.length * 2);
+            /*
+             * SHA-256 is required by the Java platform.
+             * Failure indicates an infrastructure/JVM problem,
+             * not a client validation error.
+             */
+            throw new IllegalStateException(
+                    "SHA-256 algorithm is not available",
+                    ex
+            );
+        }
+    }
 
-		for (byte b : bytes) {
+    private String bytesToHex(byte[] bytes) {
 
-			result.append(String.format("%02x", b));
-		}
+        StringBuilder result =
+                new StringBuilder(bytes.length * 2);
 
-		return result.toString();
-	}
+        for (byte b : bytes) {
 
-	// =========================================================
-	// RESULT
-	// =========================================================
+            result.append(
+                    String.format("%02x", b)
+            );
+        }
 
-	public record RefreshTokenResult(String rawToken, RefreshToken refreshToken) {
-	}
+        return result.toString();
+    }
+
+    // =========================================================
+    // RESULT
+    // =========================================================
+
+    public record RefreshTokenResult(
+            String rawToken,
+            RefreshToken refreshToken
+    ) {
+    }
 }
+

@@ -35,8 +35,7 @@ import jakarta.validation.Valid;
 @RequestMapping("/api/v1/auth")
 public class AuthenticationController {
 
-    private static final String REFRESH_COOKIE =
-            "refresh_token";
+    private static final String REFRESH_COOKIE = "refresh_token";
 
     private final AuthenticationService authenticationService;
     private final PasswordResetService passwordResetService;
@@ -45,19 +44,19 @@ public class AuthenticationController {
             AuthenticationService authenticationService,
             PasswordResetService passwordResetService
     ) {
-        this.authenticationService =
-                authenticationService;
-
-        this.passwordResetService =
-                passwordResetService;
+        this.authenticationService = authenticationService;
+        this.passwordResetService = passwordResetService;
     }
-    
+
     /**
-	 * POST /api/v1/auth/register
-	 *
-	 * Public
-	 */
-    
+     * POST /api/v1/auth/register
+     *
+     * Public endpoint.
+     *
+     * User is created as:
+     * - Role   : STUDENT
+     * - Status : PENDING
+     */
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<RegisterUserResponse> register(
@@ -65,7 +64,7 @@ public class AuthenticationController {
             HttpServletRequest httpRequest
     ) {
 
-    	RegisterUserResponse response =
+        RegisterUserResponse response =
                 authenticationService.registerUser(request);
 
         return ApiResponse.success(
@@ -80,7 +79,10 @@ public class AuthenticationController {
     /**
      * POST /api/v1/auth/login
      *
-     * Public
+     * Public endpoint.
+     *
+     * Refresh token is stored in
+     * HttpOnly + Secure cookie.
      */
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<LoginResponse>> login(
@@ -97,11 +99,11 @@ public class AuthenticationController {
                 );
 
         /*
-         * Refresh token should preferably be stored
-         * in an HttpOnly + Secure cookie.
+         * Store refresh token in HttpOnly + Secure cookie.
          */
         ResponseCookie refreshCookie =
-                ResponseCookie.from(
+                ResponseCookie
+                        .from(
                                 REFRESH_COOKIE,
                                 result.refreshToken()
                         )
@@ -118,8 +120,7 @@ public class AuthenticationController {
         );
 
         /*
-         * Do not expose refresh token in JSON when using
-         * the cookie-based production architecture.
+         * Do not expose refresh token in JSON.
          */
         LoginResponse responseBody =
                 new LoginResponse(
@@ -133,7 +134,7 @@ public class AuthenticationController {
                 .status(HttpStatus.OK)
                 .body(
                         ApiResponse.success(
-                                200,
+                                HttpStatus.OK.value(),
                                 "Login successful",
                                 responseBody,
                                 httpRequest.getRequestURI(),
@@ -154,9 +155,7 @@ public class AuthenticationController {
                     required = false
             )
             String refreshToken,
-
             HttpServletResponse response,
-
             HttpServletRequest request
     ) {
 
@@ -165,8 +164,12 @@ public class AuthenticationController {
                         refreshToken
                 );
 
+        /*
+         * Rotate refresh token and replace cookie.
+         */
         ResponseCookie refreshCookie =
-                ResponseCookie.from(
+                ResponseCookie
+                        .from(
                                 REFRESH_COOKIE,
                                 result.refreshToken()
                         )
@@ -184,7 +187,7 @@ public class AuthenticationController {
 
         return ResponseEntity.ok(
                 ApiResponse.success(
-                        200,
+                        HttpStatus.OK.value(),
                         "Token refreshed successfully",
                         result,
                         request.getRequestURI(),
@@ -204,9 +207,7 @@ public class AuthenticationController {
                     required = false
             )
             String refreshToken,
-
             Authentication authentication,
-
             HttpServletResponse response
     ) {
 
@@ -232,7 +233,8 @@ public class AuthenticationController {
          * Delete refresh-token cookie.
          */
         ResponseCookie deleteCookie =
-                ResponseCookie.from(
+                ResponseCookie
+                        .from(
                                 REFRESH_COOKIE,
                                 ""
                         )
@@ -248,16 +250,18 @@ public class AuthenticationController {
                 deleteCookie.toString()
         );
 
-        return ResponseEntity.noContent().build();
+        return ResponseEntity
+                .noContent()
+                .build();
     }
 
     /**
      * GET /api/v1/auth/me
+     *
+     * Returns currently authenticated user.
      */
     @GetMapping("/me")
-    public ResponseEntity<
-            ApiResponse<AuthUserResponse>
-            > me(
+    public ResponseEntity<ApiResponse<AuthUserResponse>> me(
             Authentication authentication,
             HttpServletRequest request
     ) {
@@ -271,7 +275,7 @@ public class AuthenticationController {
 
         return ResponseEntity.ok(
                 ApiResponse.success(
-                        200,
+                        HttpStatus.OK.value(),
                         "Authenticated user retrieved successfully",
                         user,
                         request.getRequestURI(),
@@ -282,6 +286,8 @@ public class AuthenticationController {
 
     /**
      * POST /api/v1/auth/forgot-password
+     *
+     * Always returns 202 to prevent account enumeration.
      */
     @PostMapping("/forgot-password")
     public ResponseEntity<Void> forgotPassword(
@@ -295,18 +301,19 @@ public class AuthenticationController {
         /*
          * Always return 202.
          *
-         * This prevents account enumeration.
+         * This prevents attackers from determining
+         * whether an email address exists.
          */
-        return ResponseEntity.accepted().build();
+        return ResponseEntity
+                .accepted()
+                .build();
     }
 
     /**
      * POST /api/v1/auth/reset-password
      */
     @PostMapping("/reset-password")
-    public ResponseEntity<
-            ApiResponse<Void>
-            > resetPassword(
+    public ResponseEntity<ApiResponse<Void>> resetPassword(
             @Valid @RequestBody ResetPasswordRequest request,
             HttpServletRequest httpRequest
     ) {
@@ -318,7 +325,7 @@ public class AuthenticationController {
 
         return ResponseEntity.ok(
                 ApiResponse.success(
-                        200,
+                        HttpStatus.OK.value(),
                         "Password reset successfully",
                         null,
                         httpRequest.getRequestURI(),
@@ -327,3 +334,4 @@ public class AuthenticationController {
         );
     }
 }
+
