@@ -27,12 +27,20 @@ import com.school.library.dto.response.RegisterUserResponse;
 import com.school.library.service.AuthenticationService;
 import com.school.library.service.PasswordResetService;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/v1/auth")
+@Tag(
+        name = "Authentication",
+        description = "User registration, authentication, token management and password recovery APIs"
+)
 public class AuthenticationController {
 
     private static final String REFRESH_COOKIE = "refresh_token";
@@ -57,6 +65,23 @@ public class AuthenticationController {
      * - Role   : STUDENT
      * - Status : PENDING
      */
+    @Operation(
+			summary = "Register a new user",
+			description = """
+					Registers a new user with the role of STUDENT and status of PENDING.
+					The registration will require approval by an administrator before the user can log in.
+					"""
+	)
+    @ApiResponses({
+		@io.swagger.v3.oas.annotations.responses.ApiResponse(
+				responseCode = "201",
+				description = "Registration submitted successfully. Awaiting approval."
+		),
+		@io.swagger.v3.oas.annotations.responses.ApiResponse(
+				responseCode = "400",
+				description = "Invalid request data"
+		)
+	})
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<RegisterUserResponse> register(
@@ -84,6 +109,24 @@ public class AuthenticationController {
      * Refresh token is stored in
      * HttpOnly + Secure cookie.
      */
+    @Operation(
+			summary = "Authenticate user and issue tokens",
+			description = """
+					Authenticates a user with username and password.
+					Issues an access token and a refresh token.
+					The refresh token is stored in an HttpOnly + Secure cookie.
+					"""
+	)
+    @ApiResponses({
+    			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+				responseCode = "200",
+				description = "Login successful"
+		),
+		@io.swagger.v3.oas.annotations.responses.ApiResponse(
+				responseCode = "401",
+				description = "Invalid username or password"
+		)
+    })
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<LoginResponse>> login(
             @Valid @RequestBody LoginRequest request,
@@ -148,6 +191,20 @@ public class AuthenticationController {
      *
      * Refresh token is read from HttpOnly cookie.
      */
+    @Operation(
+    		summary = "Refresh access token using refresh token",
+    					description = "Refreshes the access token using the refresh token stored in an HttpOnly + Secure cookie."
+    )
+    @ApiResponses({
+    			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+				responseCode = "200",
+				description = "Token refreshed successfully"
+		),
+		@io.swagger.v3.oas.annotations.responses.ApiResponse(
+				responseCode = "401",
+				description = "Invalid or expired refresh token"
+		)
+    })
     @PostMapping("/refresh")
     public ResponseEntity<ApiResponse<RefreshResponse>> refresh(
             @CookieValue(
@@ -199,7 +256,25 @@ public class AuthenticationController {
     /**
      * POST /api/v1/auth/logout
      */
+    @Operation(
+			summary = "Logout user and invalidate refresh token",
+			description = """
+					Logs out the user and invalidates the refresh token.
+					Optionally, logs out from all devices if specified.
+					"""
+	)
+    @ApiResponses({
+    	@io.swagger.v3.oas.annotations.responses.ApiResponse(
+    							responseCode = "204",
+    							description = "Logout successful"
+    							),
+    	@io.swagger.v3.oas.annotations.responses.ApiResponse(
+								responseCode = "204",
+								description = "Logout All Devices successful"
+								)
+    })
     @PostMapping("/logout")
+    @SecurityRequirement(name = "bearerAuth")
     public ResponseEntity<Void> logout(
             @Valid @RequestBody LogoutRequest request,
             @CookieValue(
@@ -260,7 +335,22 @@ public class AuthenticationController {
      *
      * Returns currently authenticated user.
      */
+    @Operation(
+			summary = "Get currently authenticated user",
+			description = "Returns the currently authenticated user's information."
+	)
+    @ApiResponses({
+		@io.swagger.v3.oas.annotations.responses.ApiResponse(
+								responseCode = "200",
+								description = "Authenticated user retrieved successfully"
+								),
+		@io.swagger.v3.oas.annotations.responses.ApiResponse(
+								responseCode = "401",
+								description = "Unauthorized"
+								)
+	})
     @GetMapping("/me")
+    @SecurityRequirement(name = "bearerAuth")
     public ResponseEntity<ApiResponse<AuthUserResponse>> me(
             Authentication authentication,
             HttpServletRequest request
@@ -289,6 +379,21 @@ public class AuthenticationController {
      *
      * Always returns 202 to prevent account enumeration.
      */
+    @Operation(
+    					summary = "Request password reset",
+    					description = """
+								Requests a password reset for the specified email address.
+								An email with a password reset link will be sent if the email exists.
+								Always returns 202 to prevent account enumeration.
+								"""
+    )
+    @ApiResponses({
+    			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+								responseCode = "202",
+								description = "Password reset request accepted"
+								)
+    			
+    })
     @PostMapping("/forgot-password")
     public ResponseEntity<Void> forgotPassword(
             @Valid @RequestBody ForgotPasswordRequest request
@@ -312,6 +417,20 @@ public class AuthenticationController {
     /**
      * POST /api/v1/auth/reset-password
      */
+    @Operation(
+    					summary = "Reset password using token",
+    					description = "Resets the user's password using a valid password reset token."
+    )
+    @ApiResponses({
+				@io.swagger.v3.oas.annotations.responses.ApiResponse(
+								responseCode = "200",
+								description = "Password reset successfully"
+								),
+				@io.swagger.v3.oas.annotations.responses.ApiResponse(
+								responseCode = "400",
+								description = "Invalid or expired token"
+								)
+	})
     @PostMapping("/reset-password")
     public ResponseEntity<ApiResponse<Void>> resetPassword(
             @Valid @RequestBody ResetPasswordRequest request,

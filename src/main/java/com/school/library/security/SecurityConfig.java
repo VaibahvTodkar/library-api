@@ -22,7 +22,9 @@ public class SecurityConfig {
 	private final SecurityExceptionHandler securityExceptionHandler;
 	private final SecurityAccessDeniedHandler securityAccessDeniedHandler;
 
-	public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter, SecurityExceptionHandler securityExceptionHandler, SecurityAccessDeniedHandler securityAccessDeniedHandler) {
+	public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+			SecurityExceptionHandler securityExceptionHandler,
+			SecurityAccessDeniedHandler securityAccessDeniedHandler) {
 		this.jwtAuthenticationFilter = jwtAuthenticationFilter;
 		this.securityExceptionHandler = securityExceptionHandler;
 		this.securityAccessDeniedHandler = securityAccessDeniedHandler;
@@ -41,21 +43,19 @@ public class SecurityConfig {
 
 				// We are using Bearer tokens
 				.csrf(csrf -> csrf.disable())
-				
-				.exceptionHandling(exception -> exception
-	                    .authenticationEntryPoint(
-	                            securityExceptionHandler
-	                    )
-	                    .accessDeniedHandler(
-	                            securityAccessDeniedHandler
-	                    )
-	            )
+
+				.exceptionHandling(exception -> exception.authenticationEntryPoint(securityExceptionHandler)
+						.accessDeniedHandler(securityAccessDeniedHandler))
 
 				.authorizeHttpRequests(auth -> auth
 
+						// Swagger / OpenAPI
+						.requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs", "/v3/api-docs/**")
+						.permitAll()
+
 						// Public authentication endpoints
-						.requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/forgot-password",
-								"/api/v1/auth/reset-password")
+						.requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh",
+								"/api/v1/auth/forgot-password", "/api/v1/auth/reset-password")
 						.permitAll()
 
 						.requestMatchers("/api/v1/auth/logout", "/api/v1/auth/me").authenticated()
